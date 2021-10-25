@@ -83,7 +83,7 @@ handle_info(autodiscovery_tick, #state{is_server = false} = State) ->
 handle_info({udp, Socket, FromIp, FromPort, Binary}, #state{socket = Socket} = State) ->
     try binary_to_term(Binary) of
         broadcast ->
-            gen_udp:send(Socket, FromIp, FromPort, <<"ok">>);
+            gen_udp:send(Socket, FromIp, FromPort, binary_to_term(<<"ok">>));
         _ ->
             error_logger:error_report([{unknown_udp, Binary}])
     catch
