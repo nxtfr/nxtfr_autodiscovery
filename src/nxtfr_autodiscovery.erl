@@ -81,11 +81,14 @@ handle_info(autodiscovery_tick, #state{is_server = false} = State) ->
     end;
 
 handle_info({udp, Socket, FromIp, FromPort, Binary}, #state{socket = Socket} = State) ->
-    case binary_to_term(Binary) of
+    try binary_to_term(Binary) of
         broadcast ->
             gen_udp:send(Socket, FromIp, FromPort, <<"ok">>);
         _ ->
             error_logger:error_report([{unknown_udp, Binary}])
+    catch
+        error:badarg ->
+            error_logger:error_report([{bad_udp, Binary}])
     end,
     {noreply, State};
 
@@ -106,9 +109,16 @@ create_server_socket() ->
     gen_udp:open(?AUTODISCOVER_PORT, ?UDP_OPTIONS).
 
 broadcast(#state{socket = Socket, interface = Interface}) ->
-    Ip = get_broadcast_ip(Interface),
-    error_logger:info_report([{broadcasting, Ip}]),
-    gen_udp:send(Socket, Ip, ?AUTODISCOVER_PORT, term_to_binary(broadcast)).
+    case application:get_env(nxtfr_autodiscovery, broadcast_ip) of
+        {ok, Ip} ->
+            error_logger:info_report([{broadcasting, Ip}]),
+            gen_udp:send(Socket, Ip, ?AUTODISCOVER_PORT, term_to_binary(broadcast));
+        undefined ->
+            Interface = get_interface(),
+            HeuristicIp = get_broadcast_ip(Interface),
+            error_logger:info_report([{broadcasting, HeuristicIp}]),
+            gen_udp:send(Socket, HeuristicIp, ?AUTODISCOVER_PORT, term_to_binary(broadcast))
+    end.
 
 get_broadcast_ip(Interface) ->
     {ok, IfList} = inet:getifaddrs(),
