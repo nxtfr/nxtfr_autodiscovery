@@ -1,0 +1,18 @@
+{application, nxtfr_autodiscovery,
+ [{description, "An OTP application"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {nxtfr_autodiscovery_app, []}},
+  {applications, [
+    kernel,
+    stdlib
+   ]},
+  {env,[]},
+  {modules, [
+    nxtfr_autodiscovery,
+    nxtfr_autodiscovery_app,
+    nxtfr_autodiscovery_sup
+  ]},
+  {licenses, ["MIT License"]},
+  {links, []}
+ ]}.
