@@ -80,7 +80,11 @@ handle_info(autodiscovery_tick, #state{is_server = false} = State) ->
             {noreply, State#state{timer = Timer}}
     end;
 
+%% Ignore messages from myself.
 handle_info({udp, Socket, FromIp, FromPort, Binary}, #state{socket = Socket} = State) ->
+    {noreply, State};
+
+handle_info({udp, Socket, FromIp, FromPort, Binary}, State) ->
     try binary_to_term(Binary) of
         broadcast ->
             gen_udp:send(Socket, FromIp, FromPort, term_to_binary(ok));
