@@ -8,7 +8,8 @@
 
 %% External exports
 -export([
-    start_link/0
+    start_link/0,
+    info/0
     ]).
 
 %% gen_server callbacks
@@ -29,6 +30,9 @@
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+
+info() ->
+    gen_server:call(?MODULE, info).
 
 init([]) ->
     Interface = ?MODULE:get_interface(),
@@ -54,6 +58,9 @@ init([]) ->
             ?MODULE:broadcast(State),
             {ok, State}
     end.
+
+handle_call(info, _From, State) ->
+    {reply, {ok, State}, State};
 
 handle_call(Call, _From, State) ->
     error_logger:error_report([{undefined_call, Call}]),
