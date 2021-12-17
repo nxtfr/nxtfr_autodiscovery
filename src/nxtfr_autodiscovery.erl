@@ -51,7 +51,7 @@ info() ->
     gen_server:call(?MODULE, info).
 
 add_group(Group) ->
-    gen_server:call(?MODULE, {set_group, Group}).
+    gen_server:call(?MODULE, {add_group, Group}).
 
 remove_group(Group) ->
     gen_server:call(?MODULE, {remove_group, Group}).
@@ -88,7 +88,7 @@ init([]) ->
 handle_call(info, _From, State) ->
     {reply, {ok, State}, State};
 
-handle_call({set_group, Group}, _From, #state{my_groups = MyGroups} = State) ->
+handle_call({add_group, Group}, _From, #state{my_groups = MyGroups} = State) ->
     case lists:member(Group, MyGroups) of
         true ->
             {reply, ok, State};
@@ -96,6 +96,10 @@ handle_call({set_group, Group}, _From, #state{my_groups = MyGroups} = State) ->
             UpdatedMyGroups = lists:append([Group], MyGroups),
             {reply, ok, State#state{my_groups = UpdatedMyGroups}}
     end;
+
+handle_call({remove_group, Group}, _From, #state{my_groups = MyGroups} = State) ->
+    UpdatedMyGroups = lists:delete(Group, MyGroups),
+    {reply, ok, State#state{my_groups = UpdatedMyGroups}};
 
 handle_call(Call, _From, State) ->
     error_logger:error_report([{undefined_call, Call}]),
