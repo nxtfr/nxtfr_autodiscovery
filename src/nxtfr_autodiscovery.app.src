@@ -9,7 +9,8 @@
    ]},
   {env,[
     {ip, {192, 168, 1, 211}},
-    {broadcast_ip, {192, 168, 1, 255}}
+    {multicast_ip, {192, 168, 1, 255}},
+    {multicast_interface, "wlp0s20f3"}
   ]},
   {modules, [
     nxtfr_autodiscovery,

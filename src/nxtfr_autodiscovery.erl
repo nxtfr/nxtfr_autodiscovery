@@ -4,7 +4,6 @@
             
 -define(UDP_OPTIONS, [
     binary,
-    %{header, 2},
     {reuseaddr, false}, 
     {broadcast, true},
     {active, true},
@@ -13,6 +12,11 @@
 
 -define(AUTODISCOVER_PORT, 65501).
 -define(AUTODISCOVER_TICK_TIME, 10000).
+
+%% Tmp exports during development
+-export([
+    dev/0
+    ]).
 
 %% External exports
 -export([
@@ -29,8 +33,8 @@
 
 %% Internal exports
 -export([
-    create_server_socket/0,
-    broadcast/2,
+    create_server_socket/1,
+    multicast/2,
     send_tick/0,
     get_interface/0
     ]).
@@ -41,8 +45,14 @@
     is_server,
     timer,
     interface,
+    ip,
+    multicast_ip,
     my_groups = [],
     node_groups = {}}).
+
+dev() ->
+    application:start(nxtfr_autodiscovery),
+    nxtfr_event:notify({add_autodiscovery_group, client}).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -61,7 +71,8 @@ init([]) ->
     nxtfr_event:add_handler(nxtfr_autodiscovery_event_handler),
     Interface = ?MODULE:get_interface(),
     Timer = ?MODULE:send_tick(),
-    case ?MODULE:create_server_socket() of
+    {Ip, MulticastIp} = get_ip_and_multicast(Interface),
+    case ?MODULE:create_server_socket(Ip) of
         {ok, Socket} ->
             error_logger:info_msg({created_server, Socket}),
             State = #state{
@@ -69,6 +80,8 @@ init([]) ->
                 is_server = true,
                 timer = Timer,
                 interface = Interface,
+                ip = Ip,
+                multicast_ip = MulticastIp,
                 node_groups = #{}},
             %?MODULE:broadcast(State),
             {ok, State};
@@ -80,8 +93,10 @@ init([]) ->
                 is_server = false,
                 timer = Timer,
                 interface = Interface,
+                ip = Ip,
+                multicast_ip = MulticastIp,
                 node_groups = #{}},
-            %?MODULE:broadcast(State),
+            %?MODULE:multicast(State),
             {ok, State}
     end.
 
@@ -94,6 +109,7 @@ handle_call({add_group, Group}, _From, #state{my_groups = MyGroups} = State) ->
             {reply, ok, State};
         false ->
             UpdatedMyGroups = lists:append([Group], MyGroups),
+            multicast_add_group(Group, State),
             {reply, ok, State#state{my_groups = UpdatedMyGroups}}
     end;
 
@@ -111,19 +127,19 @@ handle_cast(Cast, State) ->
 
 handle_info(autodiscovery_tick, #state{is_server = true} = State) ->
     Timer = ?MODULE:send_tick(),
-    %?MODULE:broadcast(State),
+    %?MODULE:multicast(State),
     {noreply, State#state{timer = Timer}};
 
-handle_info(autodiscovery_tick, #state{is_server = false} = State) ->
-    error_logger:info_msg({client, autodiscovery_tick}),
+handle_info(autodiscovery_tick, #state{is_server = false, ip = Ip} = State) ->
+    %error_logger:info_msg({client, autodiscovery_tick}),
     Timer = ?MODULE:send_tick(),
-    case create_server_socket() of
+    case create_server_socket(Ip) of
         {ok, Socket} ->
             NewState = State#state{socket = Socket, is_server = true, timer = Timer},
-            %?MODULE:broadcast(NewState),
+            %?MODULE:multicast(NewState),
             {noreply, NewState#state{timer = Timer}};
         {error, eaddrinuse} ->
-            %?MODULE:broadcast(State, <<"tick">>),
+            %?MODULE:multicast(State, <<"tick">>),
             {noreply, State#state{timer = Timer}}
     end;
 
@@ -131,18 +147,27 @@ handle_info({udp, Socket, FromIp, FromPort, Binary}, #state{is_server = false} =
     error_logger:info_msg({udp_received_on_client, Socket, FromIp, FromPort, Binary}),
     {noreply, State};
 
-handle_info({udp, Socket, FromIp, FromPort, Binary}, #state{is_server = true} = State) ->
-    error_logger:info_msg({udp_received_on_server, FromIp, Binary}),
-    try binary_to_term(Binary) of
-        broadcast ->
-            send_term(Socket, FromIp, FromPort, ok);
+handle_info(
+        {udp, _Socket, FromIp, _FromPort, <<MessageSize:16/integer, BinaryTerm:MessageSize/binary>>},
+        #state{is_server = true, node_groups = NodeGroups} = State) ->
+    error_logger:info_msg({udp_received_on_server, FromIp, BinaryTerm}),
+    try binary_to_term(BinaryTerm) of
+        {add_group, Group, Node} ->
+            Nodes = maps:get(Group, NodeGroups, []),
+            UpdatedNodeGroups = maps:put(Group, lists:append([Node], Nodes), NodeGroups),
+            error_logger:info_report({from_client, add_group, Group, Node}),
+            {noreply, State#state{node_groups = UpdatedNodeGroups}};
         _ ->
-            error_logger:error_report([{unknown_udp, Binary}])
+            error_logger:error_report([{unknown_udp, BinaryTerm}]),
+            {noreply, State}
     catch
         error:badarg ->
-            error_logger:error_report([{bad_udp, Binary}]),
-            send_term(Socket, FromIp, FromPort, <<"HelloFromServer">>)
-    end,
+            error_logger:error_report([{bad_udp, BinaryTerm}]),
+            {noreply, State}
+    end;
+
+handle_info({udp, _Socket, FromIp, _FromPort, <<MessageSize:16/integer, Binary/binary>>}, #state{is_server = true} = State) ->
+    error_logger:warning_report({udp_received_on_server, FromIp, size_mismatch, {size, MessageSize}, {binary, Binary}}),
     {noreply, State};
 
 handle_info(Info, State) ->
@@ -158,20 +183,20 @@ terminate(_Reason, _State) ->
 send_tick() ->
     erlang:send_after(?AUTODISCOVER_TICK_TIME, self(), autodiscovery_tick).
 
-create_server_socket() ->
-    gen_udp:open(?AUTODISCOVER_PORT, ?UDP_OPTIONS).
+create_server_socket(Ip) ->
+    Options = lists:append([{ip, Ip}], ?UDP_OPTIONS),
+    gen_udp:open(?AUTODISCOVER_PORT, Options).
 
-broadcast(#state{socket = Socket, interface = Interface}, Term) ->
-    case application:get_env(nxtfr_autodiscovery, broadcast_ip) of
-        {ok, Ip} ->
-            error_logger:info_report([{broadcasting, Ip}]),
-            send_term(Socket, Ip, ?AUTODISCOVER_PORT, Term);
-        undefined ->
-            Interface = get_interface(),
-            HeuristicIp = get_broadcast_ip(Interface),
-            error_logger:info_report([{broadcasting, HeuristicIp}]),
-            send_term(Socket, HeuristicIp, ?AUTODISCOVER_PORT, Term)
-    end.
+multicast_add_group(Group, State) ->
+    Term = {add_group, Group, node()},
+    multicast(Term, State).
+
+multicast(Term, #state{socket = Socket, ip = Ip, is_server = false}) ->
+    error_logger:info_report({sending_client_udp, Term, Ip, ?AUTODISCOVER_PORT}),
+    send_term(Socket, Ip, ?AUTODISCOVER_PORT, Term);
+
+multicast(Term, #state{socket = Socket, multicast_ip = MulticastIp, is_server = true}) ->
+    send_term(Socket, MulticastIp, ?AUTODISCOVER_PORT, Term).
 
 send_term(Socket, Ip, Port, Term) ->
     BinaryTerm = term_to_binary(Term),
@@ -179,19 +204,15 @@ send_term(Socket, Ip, Port, Term) ->
     Message = <<MessageSize:16/integer, BinaryTerm/binary>>,
     gen_udp:send(Socket, Ip, Port, Message).
 
-get_broadcast_ip(Interface) ->
+get_ip_and_multicast(Interface) ->
     {ok, IfList} = inet:getifaddrs(),
     {_, LoOpts} = proplists:lookup(Interface, IfList),
-    proplists:lookup(broadaddr, LoOpts).
-
-get_ip() ->
-    case application:get_env(nxtfr_autodiscovery, ip) of
-        undefined -> {0, 0, 0, 0};
-        {ok, Ip} -> Ip
-    end.
+    {_, Ip} = proplists:lookup(addr, LoOpts),
+    {_, MulticastIp} = proplists:lookup(broadaddr, LoOpts),
+    {Ip, MulticastIp}.
 
 get_interface() ->
-    case application:get_env(nxtfr_autodiscovery, interface) of
+    case application:get_env(nxtfr_autodiscovery, multicast_interface) of
         undefined -> "eth0";
         {ok, Interface} -> Interface
     end.
