@@ -15,7 +15,7 @@
 
 %% Tmp exports during development
 -export([
-    dev/0
+    dev1/0, dev2/0
     ]).
 
 %% External exports
@@ -48,11 +48,16 @@
     ip,
     multicast_ip,
     my_groups = [],
+    local_nodes = [],
     node_groups = {}}).
 
-dev() ->
+dev1() ->
     application:start(nxtfr_autodiscovery),
-    nxtfr_event:notify({add_autodiscovery_group, client}).
+    nxtfr_event:notify({add_autodiscovery_group, client1}).
+
+dev2() ->
+    application:start(nxtfr_autodiscovery),
+    nxtfr_event:notify({add_autodiscovery_group, client2}).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -65,6 +70,9 @@ add_group(Group) ->
 
 remove_group(Group) ->
     gen_server:call(?MODULE, {remove_group, Group}).
+
+group_info(Group, Node) ->
+    gen_server:call(?MODULE, {groupInfo, Group, Node}).
 
 init([]) ->
     application:start(nxtfr_event),
@@ -117,6 +125,16 @@ handle_call({remove_group, Group}, _From, #state{my_groups = MyGroups} = State) 
     UpdatedMyGroups = lists:delete(Group, MyGroups),
     {reply, ok, State#state{my_groups = UpdatedMyGroups}};
 
+handle_call({groupinfo, {Group, Node}}, _From, #state{node_groups = NodeGroups} = State) ->
+    Nodes = maps:get(Group, NodeGroups, []),
+    case lists:member(Node, Nodes) of
+        true ->
+            {reply, ok, State};
+        false ->
+            UpdatedNodeGroups = maps:put(Group, lists:append([Node], Nodes), NodeGroups),
+            {reply, ok, State#state{node_groups = UpdatedNodeGroups}}
+    end;
+
 handle_call(Call, _From, State) ->
     error_logger:error_report([{undefined_call, Call}]),
     {reply, ok, State}.
@@ -156,7 +174,9 @@ handle_info(
             Nodes = maps:get(Group, NodeGroups, []),
             UpdatedNodeGroups = maps:put(Group, lists:append([Node], Nodes), NodeGroups),
             error_logger:info_report({from_client, add_group, Group, Node}),
-            {noreply, State#state{node_groups = UpdatedNodeGroups}};
+            {ok, UpdatedState} = update_local_nodes(Node, State),
+            send_groupinfo_to_local_nodes() FIXME Change to sync_local_nodes?
+            {noreply, UpdatedState#state{node_groups = UpdatedNodeGroups}};
         _ ->
             error_logger:error_report([{unknown_udp, BinaryTerm}]),
             {noreply, State}
@@ -216,3 +236,21 @@ get_interface() ->
         undefined -> "eth0";
         {ok, Interface} -> Interface
     end.
+
+update_local_nodes(Node, #state{local_nodes = LocalNodes} = State) ->
+    case {is_node_local(Node), lists:member(Node, LocalNodes)} of 
+        {false, _} ->
+            {ok, State};
+        {true, true} -> 
+            {ok, State};
+        {true, false} ->
+            {ok, State#state{local_nodes = lists:append([Node], LocalNodes)}}
+    end.
+
+is_node_local(OtherNode) ->
+    OtherHost = lists:nth(2, string:split(atom_to_binary(OtherNode), <<"@">>)),
+    MyHost = lists:nth(2, string:split(atom_to_binary(node()), <<"@">>)),
+    OtherHost == MyHost.
+
+send_groupinfo_to_local_nodes(Group, Node, #state{local_nodes = LocalNodes}) ->
+    [rpc:call(LocalNode, nxtfr_event, notify, [{groupinfo, Group, Node}]) || LocalNode <- LocalNodes].

@@ -15,6 +15,10 @@ handle_event({remove_autodiscovery_group, Group}, State) ->
     nxtfr_autodiscovery:remove_group(Group),
     {ok, State};
 
+handle_event({autodiscovery_groupinfo, Group, Node}, State) ->
+    nxtfr_autodiscovery:groupinfo(Group, Node),
+    {ok, State};
+
 handle_event(Event, State) ->
     error_logger:info_report({?MODULE, unknown_event, Event}),
     {ok, State}.
