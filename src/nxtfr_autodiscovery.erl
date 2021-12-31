@@ -23,7 +23,8 @@
     start_link/0,
     info/0,
     add_group/1,
-    remove_group/1
+    remove_group/1,
+    sync_group/3
     ]).
 
 %% gen_server callbacks
@@ -71,8 +72,9 @@ add_group(Group) ->
 remove_group(Group) ->
     gen_server:call(?MODULE, {remove_group, Group}).
 
-group_info(Group, Node) ->
-    gen_server:call(?MODULE, {groupInfo, Group, Node}).
+%% Operation [add | remove]
+sync_group(Group, Node, Operation) ->
+    gen_server:call(?MODULE, {sync_group, Group, Node, Operation}).
 
 init([]) ->
     application:start(nxtfr_event),
@@ -117,7 +119,7 @@ handle_call({add_group, Group}, _From, #state{my_groups = MyGroups} = State) ->
             {reply, ok, State};
         false ->
             UpdatedMyGroups = lists:append([Group], MyGroups),
-            multicast_add_group(Group, State),
+            multicast_add_group(Group, State), TODO - what to do here, make server rpc call local nodes and send multicast?
             {reply, ok, State#state{my_groups = UpdatedMyGroups}}
     end;
 
@@ -125,14 +127,21 @@ handle_call({remove_group, Group}, _From, #state{my_groups = MyGroups} = State) 
     UpdatedMyGroups = lists:delete(Group, MyGroups),
     {reply, ok, State#state{my_groups = UpdatedMyGroups}};
 
-handle_call({groupinfo, {Group, Node}}, _From, #state{node_groups = NodeGroups} = State) ->
+handle_call({sync_group, Group, Node, Operation},
+        _From,
+        #state{node_groups = NodeGroups} = State) ->
     Nodes = maps:get(Group, NodeGroups, []),
-    case lists:member(Node, Nodes) of
-        true ->
+    case {Operation, lists:member(Node, Nodes)} of
+        {add, true} ->
             {reply, ok, State};
-        false ->
+        {add, false} ->
             UpdatedNodeGroups = maps:put(Group, lists:append([Node], Nodes), NodeGroups),
-            {reply, ok, State#state{node_groups = UpdatedNodeGroups}}
+            {reply, ok, State#state{node_groups = UpdatedNodeGroups}};
+        {remove, true} ->
+            UpdatedNodeGroups = maps:put(Group, lists:delete(Node, Nodes), NodeGroups),
+            {reply, ok, State#state{node_groups = UpdatedNodeGroups}};
+        {remove, false} ->
+            {reply, ok, State}
     end;
 
 handle_call(Call, _From, State) ->
@@ -175,7 +184,7 @@ handle_info(
             UpdatedNodeGroups = maps:put(Group, lists:append([Node], Nodes), NodeGroups),
             error_logger:info_report({from_client, add_group, Group, Node}),
             {ok, UpdatedState} = update_local_nodes(Node, State),
-            send_groupinfo_to_local_nodes() FIXME Change to sync_local_nodes?
+            sync_local_nodes(Group, Node, add, UpdatedState),
             {noreply, UpdatedState#state{node_groups = UpdatedNodeGroups}};
         _ ->
             error_logger:error_report([{unknown_udp, BinaryTerm}]),
@@ -252,5 +261,5 @@ is_node_local(OtherNode) ->
     MyHost = lists:nth(2, string:split(atom_to_binary(node()), <<"@">>)),
     OtherHost == MyHost.
 
-send_groupinfo_to_local_nodes(Group, Node, #state{local_nodes = LocalNodes}) ->
-    [rpc:call(LocalNode, nxtfr_event, notify, [{groupinfo, Group, Node}]) || LocalNode <- LocalNodes].
+sync_local_nodes(Group, Node, Operation, #state{local_nodes = LocalNodes}) ->
+    [rpc:call(LocalNode, nxtfr_event, notify, [{sync_group, Group, Node, Operation}]) || LocalNode <- LocalNodes].

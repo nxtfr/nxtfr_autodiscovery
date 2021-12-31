@@ -15,8 +15,8 @@ handle_event({remove_autodiscovery_group, Group}, State) ->
     nxtfr_autodiscovery:remove_group(Group),
     {ok, State};
 
-handle_event({autodiscovery_groupinfo, Group, Node}, State) ->
-    nxtfr_autodiscovery:groupinfo(Group, Node),
+handle_event({autodiscovery_sync_groups, SyncGroups}, State) ->
+    nxtfr_autodiscovery:sync_groups(SyncGroups),
     {ok, State};
 
 handle_event(Event, State) ->
