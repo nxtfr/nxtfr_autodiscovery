@@ -1,6 +1,8 @@
 -module(nxtfr_autodiscovery).
 -author("christian@flodihn.se").
 -behaviour(gen_server).
+
+-type(ip() :: {integer(), integer(), integer(), integer()}).
             
 -define(UDP_OPTIONS, [
     binary,
@@ -22,9 +24,10 @@
 -export([
     start_link/0,
     info/0,
-    add_group/1,
-    remove_group/1,
-    sync_group/3
+    join_group/1,
+    leave_group/1,
+    sync_group/3,
+    push_groups/1
     ]).
 
 %% gen_server callbacks
@@ -42,40 +45,50 @@
 
 %% server state
 -record(state, {
-    socket, 
-    is_server,
-    timer,
-    interface,
-    ip,
-    multicast_ip,
-    my_groups = [],
-    local_nodes = [],
-    node_groups = {}}).
+    socket :: port(), 
+    is_server :: boolean(),
+    timer :: reference(),
+    interface :: string(),
+    ip :: ip(),
+    multicast_ip :: ip(),
+    my_groups = [] :: list(),
+    local_nodes = [] :: list(),
+    node_groups = {} :: map()
+}).
+-type state() :: #state{}.
 
 dev1() ->
     application:start(nxtfr_autodiscovery),
-    nxtfr_event:notify({add_autodiscovery_group, client1}).
+    nxtfr_event:notify({join_autodiscovery_group, client1}).
 
 dev2() ->
     application:start(nxtfr_autodiscovery),
-    nxtfr_event:notify({add_autodiscovery_group, client2}).
+    nxtfr_event:notify({join_autodiscovery_group, client2}).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
+-spec info() -> {ok, state()}.
 info() ->
     gen_server:call(?MODULE, info).
 
-add_group(Group) ->
-    gen_server:call(?MODULE, {add_group, Group}).
+-spec join_group(Group :: atom()) -> ok.
+join_group(Group) ->
+    gen_server:call(?MODULE, {join_group, Group}).
 
-remove_group(Group) ->
-    gen_server:call(?MODULE, {remove_group, Group}).
+-spec leave_group(Group :: atom()) -> ok.
+leave_group(Group) ->
+    gen_server:call(?MODULE, {leave_group, Group}).
 
-%% Operation [add | remove]
+-spec sync_group(Group :: atom(), Node :: atom(), Operation :: add | remove) -> ok.
 sync_group(Group, Node, Operation) ->
     gen_server:call(?MODULE, {sync_group, Group, Node, Operation}).
 
+-spec push_groups(NodeGroups :: map()) -> ok.
+push_groups(NodeGroups) ->
+    gen_server:call(?MODULE, {push_groups, NodeGroups}).
+
+-spec init([]) -> {ok, state()}.
 init([]) ->
     application:start(nxtfr_event),
     nxtfr_event:add_handler(nxtfr_autodiscovery_event_handler),
@@ -93,7 +106,6 @@ init([]) ->
                 ip = Ip,
                 multicast_ip = MulticastIp,
                 node_groups = #{}},
-            %?MODULE:broadcast(State),
             {ok, State};
         {error, eaddrinuse} ->
             {ok, Socket} = gen_udp:open(0, ?UDP_OPTIONS),
@@ -106,43 +118,42 @@ init([]) ->
                 ip = Ip,
                 multicast_ip = MulticastIp,
                 node_groups = #{}},
-            %?MODULE:multicast(State),
             {ok, State}
     end.
 
 handle_call(info, _From, State) ->
     {reply, {ok, State}, State};
 
-handle_call({add_group, Group}, _From, #state{my_groups = MyGroups} = State) ->
+handle_call({join_group, Group}, _From, #state{my_groups = MyGroups, is_server = true} = State) ->
     case lists:member(Group, MyGroups) of
         true ->
             {reply, ok, State};
         false ->
             UpdatedMyGroups = lists:append([Group], MyGroups),
-            multicast_add_group(Group, State), TODO - what to do here, make server rpc call local nodes and send multicast?
+            UpdatedState = update_node_groups(Group, node(), add, State),
+            {reply, ok, UpdatedState#state{my_groups = UpdatedMyGroups}}
+    end;
+
+handle_call({join_group, Group}, _From, #state{my_groups = MyGroups, is_server = false} = State) ->
+    case lists:member(Group, MyGroups) of
+        true ->
+            {reply, ok, State};
+        false ->
+            UpdatedMyGroups = lists:append([Group], MyGroups),
+            multicast_join_group(Group, State),
             {reply, ok, State#state{my_groups = UpdatedMyGroups}}
     end;
 
-handle_call({remove_group, Group}, _From, #state{my_groups = MyGroups} = State) ->
+handle_call({leave_group, Group}, _From, #state{my_groups = MyGroups} = State) ->
     UpdatedMyGroups = lists:delete(Group, MyGroups),
     {reply, ok, State#state{my_groups = UpdatedMyGroups}};
 
-handle_call({sync_group, Group, Node, Operation},
-        _From,
-        #state{node_groups = NodeGroups} = State) ->
-    Nodes = maps:get(Group, NodeGroups, []),
-    case {Operation, lists:member(Node, Nodes)} of
-        {add, true} ->
-            {reply, ok, State};
-        {add, false} ->
-            UpdatedNodeGroups = maps:put(Group, lists:append([Node], Nodes), NodeGroups),
-            {reply, ok, State#state{node_groups = UpdatedNodeGroups}};
-        {remove, true} ->
-            UpdatedNodeGroups = maps:put(Group, lists:delete(Node, Nodes), NodeGroups),
-            {reply, ok, State#state{node_groups = UpdatedNodeGroups}};
-        {remove, false} ->
-            {reply, ok, State}
-    end;
+handle_call({sync_group, Group, Node, Operation}, _From, State) ->
+    UpdatedState = update_node_groups(Group, Node, Operation, State),
+    {reply, ok, UpdatedState};
+
+handle_call({push_groups, NodeGroups}, _From, #state{is_server = false} = State) ->
+    {reply, ok, State#state{node_groups = NodeGroups}};
 
 handle_call(Call, _From, State) ->
     error_logger:error_report([{undefined_call, Call}]),
@@ -170,20 +181,19 @@ handle_info(autodiscovery_tick, #state{is_server = false, ip = Ip} = State) ->
             {noreply, State#state{timer = Timer}}
     end;
 
-handle_info({udp, Socket, FromIp, FromPort, Binary}, #state{is_server = false} = State) ->
-    error_logger:info_msg({udp_received_on_client, Socket, FromIp, FromPort, Binary}),
+handle_info({udp, _Socket, _FromIp, _FromPort, Binary}, #state{is_server = false} = State) ->
+    error_logger:warning_report({?MODULE, handle_info, unknown_binary, Binary}),
     {noreply, State};
 
 handle_info(
-        {udp, _Socket, FromIp, _FromPort, <<MessageSize:16/integer, BinaryTerm:MessageSize/binary>>},
+        {udp, _Socket, _FromIp, _FromPort, <<MessageSize:16/integer, BinaryTerm:MessageSize/binary>>},
         #state{is_server = true, node_groups = NodeGroups} = State) ->
-    error_logger:info_msg({udp_received_on_server, FromIp, BinaryTerm}),
     try binary_to_term(BinaryTerm) of
-        {add_group, Group, Node} ->
+        {join_group, Group, Node} ->
             Nodes = maps:get(Group, NodeGroups, []),
             UpdatedNodeGroups = maps:put(Group, lists:append([Node], Nodes), NodeGroups),
-            error_logger:info_report({from_client, add_group, Group, Node}),
             {ok, UpdatedState} = update_local_nodes(Node, State),
+            push_node_groups(Node, UpdatedState),
             sync_local_nodes(Group, Node, add, UpdatedState),
             {noreply, UpdatedState#state{node_groups = UpdatedNodeGroups}};
         _ ->
@@ -209,17 +219,21 @@ code_change(_OldVsn, State, _Extra) ->
 terminate(_Reason, _State) ->
     ok.
 
+-spec send_tick() -> reference().
 send_tick() ->
     erlang:send_after(?AUTODISCOVER_TICK_TIME, self(), autodiscovery_tick).
 
+-spec create_server_socket(Ip :: ip()) -> port().
 create_server_socket(Ip) ->
     Options = lists:append([{ip, Ip}], ?UDP_OPTIONS),
     gen_udp:open(?AUTODISCOVER_PORT, Options).
 
-multicast_add_group(Group, State) ->
-    Term = {add_group, Group, node()},
+-spec multicast_join_group(Group :: atom(), State :: state()) -> ok.
+multicast_join_group(Group, State) ->
+    Term = {join_group, Group, node()},
     multicast(Term, State).
 
+-spec multicast(Term :: any(), State :: state()) -> ok.
 multicast(Term, #state{socket = Socket, ip = Ip, is_server = false}) ->
     error_logger:info_report({sending_client_udp, Term, Ip, ?AUTODISCOVER_PORT}),
     send_term(Socket, Ip, ?AUTODISCOVER_PORT, Term);
@@ -227,12 +241,14 @@ multicast(Term, #state{socket = Socket, ip = Ip, is_server = false}) ->
 multicast(Term, #state{socket = Socket, multicast_ip = MulticastIp, is_server = true}) ->
     send_term(Socket, MulticastIp, ?AUTODISCOVER_PORT, Term).
 
+-spec send_term(Socket :: port(), Ip :: ip(), Port :: integer(), Term :: any()) -> ok.
 send_term(Socket, Ip, Port, Term) ->
     BinaryTerm = term_to_binary(Term),
     MessageSize = byte_size(BinaryTerm),
     Message = <<MessageSize:16/integer, BinaryTerm/binary>>,
     gen_udp:send(Socket, Ip, Port, Message).
 
+-spec get_ip_and_multicast(Interface :: string()) -> {Ip :: ip(), MulticaetIp :: ip()}.
 get_ip_and_multicast(Interface) ->
     {ok, IfList} = inet:getifaddrs(),
     {_, LoOpts} = proplists:lookup(Interface, IfList),
@@ -240,12 +256,30 @@ get_ip_and_multicast(Interface) ->
     {_, MulticastIp} = proplists:lookup(broadaddr, LoOpts),
     {Ip, MulticastIp}.
 
+-spec get_interface() -> Interface :: string().
 get_interface() ->
     case application:get_env(nxtfr_autodiscovery, multicast_interface) of
         undefined -> "eth0";
         {ok, Interface} -> Interface
     end.
 
+-spec update_node_groups(Group :: atom(), Node :: atom(), Operation :: add | remove, State :: state()) -> state().
+update_node_groups(Group, Node, Operation, #state{node_groups = NodeGroups} = State) ->
+    Nodes = maps:get(Group, NodeGroups, []),
+    case {Operation, lists:member(Node, Nodes)} of
+        {add, true} ->
+            State;
+        {add, false} ->
+            UpdatedNodeGroups = maps:put(Group, lists:append([Node], Nodes), NodeGroups),
+            State#state{node_groups = UpdatedNodeGroups};
+        {remove, true} ->
+            UpdatedNodeGroups = maps:put(Group, lists:delete(Node, Nodes), NodeGroups),
+            State#state{node_groups = UpdatedNodeGroups};
+        {remove, false} ->
+            State
+    end.
+
+-spec update_local_nodes(Node :: atom(), State :: state()) -> {ok, state()}.
 update_local_nodes(Node, #state{local_nodes = LocalNodes} = State) ->
     case {is_node_local(Node), lists:member(Node, LocalNodes)} of 
         {false, _} ->
@@ -256,10 +290,18 @@ update_local_nodes(Node, #state{local_nodes = LocalNodes} = State) ->
             {ok, State#state{local_nodes = lists:append([Node], LocalNodes)}}
     end.
 
+-spec is_node_local(OtherNode :: atom) -> boolean().
 is_node_local(OtherNode) ->
     OtherHost = lists:nth(2, string:split(atom_to_binary(OtherNode), <<"@">>)),
     MyHost = lists:nth(2, string:split(atom_to_binary(node()), <<"@">>)),
     OtherHost == MyHost.
 
+-spec sync_local_nodes(Group :: atom(), Node :: atom(), Operation :: add | remove, state()) -> any().
 sync_local_nodes(Group, Node, Operation, #state{local_nodes = LocalNodes}) ->
-    [rpc:call(LocalNode, nxtfr_event, notify, [{sync_group, Group, Node, Operation}]) || LocalNode <- LocalNodes].
+    %% We do not need to to send a sync message to the node that joined the group.
+    LocalNodesToSync = lists:delete(Node, LocalNodes),
+    [rpc:call(LocalNode, nxtfr_autodiscovery, sync_group, [Group, Node, Operation]) || LocalNode <- LocalNodesToSync].
+
+-spec push_node_groups(Node :: atom, State :: state()) -> ok.
+push_node_groups(Node, #state{node_groups = NodeGroups}) ->
+    rpc:call(Node, nxtfr_autodiscovery, push_groups, [NodeGroups]).    

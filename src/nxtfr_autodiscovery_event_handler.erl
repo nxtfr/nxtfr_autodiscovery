@@ -6,17 +6,17 @@
  
 init([]) ->
     {ok, []}.
- 
-handle_event({add_autodiscovery_group, Group}, State) ->
-    nxtfr_autodiscovery:add_group(Group),
+
+handle_event({join_autodiscovery_group, Group}, State) ->
+    nxtfr_autodiscovery:join_group(Group),
     {ok, State};
 
-handle_event({remove_autodiscovery_group, Group}, State) ->
-    nxtfr_autodiscovery:remove_group(Group),
+handle_event({leave_autodiscovery_group, Group}, State) ->
+    nxtfr_autodiscovery:join_group(Group),
     {ok, State};
 
-handle_event({autodiscovery_sync_groups, SyncGroups}, State) ->
-    nxtfr_autodiscovery:sync_groups(SyncGroups),
+handle_event({autodiscovery_sync_group, Group, Node, Operation}, State) ->
+    nxtfr_autodiscovery:sync_group(Group, Node, Operation),
     {ok, State};
 
 handle_event(Event, State) ->
