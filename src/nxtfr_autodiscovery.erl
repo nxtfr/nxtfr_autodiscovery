@@ -27,7 +27,8 @@
     join_group/1,
     leave_group/1,
     sync_group/3,
-    push_groups/1
+    push_groups/1,
+    query_group/1
     ]).
 
 %% gen_server callbacks
@@ -87,6 +88,10 @@ sync_group(Group, Node, Operation) ->
 -spec push_groups(NodeGroups :: map()) -> ok.
 push_groups(NodeGroups) ->
     gen_server:call(?MODULE, {push_groups, NodeGroups}).
+
+-spec query_group(Group :: atom()) -> {ok, Nodes :: list()}.
+query_group(Group) ->
+    gen_server:call(?MODULE, {query_group, Group}).
 
 -spec init([]) -> {ok, state()}.
 init([]) ->
@@ -156,6 +161,14 @@ handle_call({push_groups, NodeGroups}, _From, #state{is_server = false} = State)
     io:format("handle_call({push_groups, NodeGroups} ~p~n", [NodeGroups]),
     {reply, ok, State#state{node_groups = NodeGroups}};
 
+handle_call({query_group, Group}, _From, #state{node_groups = NodeGroups} = State) ->
+    case maps:find(Group, NodeGroups) of
+        {ok, GroupList} ->
+            {reply, {ok, GroupList}, State};
+        error ->
+            {reply, {ok, []}, State}
+    end;
+
 handle_call(Call, _From, State) ->
     error_logger:error_report([{undefined_call, Call}]),
     {reply, ok, State}.
@@ -194,7 +207,8 @@ handle_info(
             Nodes = maps:get(Group, NodeGroups, []),
             UpdatedNodeGroups = maps:put(Group, lists:append([Node], Nodes), NodeGroups),
             {ok, UpdatedState} = update_local_nodes(Node, State),
-            push_node_groups(Node, UpdatedState),
+            io:format("Service pushing nodegroups: ~p.~n", [UpdatedNodeGroups]),
+            push_node_groups(Node, UpdatedNodeGroups),
             sync_local_nodes(Group, Node, add, UpdatedState),
             {noreply, UpdatedState#state{node_groups = UpdatedNodeGroups}};
         _ ->
@@ -303,6 +317,6 @@ sync_local_nodes(Group, Node, Operation, #state{local_nodes = LocalNodes}) ->
     LocalNodesToSync = lists:delete(Node, LocalNodes),
     [rpc:call(LocalNode, nxtfr_autodiscovery, sync_group, [Group, Node, Operation]) || LocalNode <- LocalNodesToSync].
 
--spec push_node_groups(Node :: atom, State :: state()) -> ok.
-push_node_groups(Node, #state{node_groups = NodeGroups}) ->
-    rpc:call(Node, nxtfr_autodiscovery, push_groups, [NodeGroups]).    
+-spec push_node_groups(Node::atom(), NodeGroups :: list()) -> ok.
+push_node_groups(Node, NodeGroups) ->
+    rpc:call(Node, nxtfr_autodiscovery, push_groups, [NodeGroups]).
