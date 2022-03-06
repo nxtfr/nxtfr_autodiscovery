@@ -15,7 +15,7 @@ handle_event({leave_autodiscovery_group, Group}, State) ->
     nxtfr_autodiscovery:join_group(Group),
     {ok, State};
 
-handle_event({autodiscovery_sync_group, Group, Node, Operation}, State) ->
+handle_event({sync_autodiscovery_group, Group, Node, Operation}, State) ->
     nxtfr_autodiscovery:sync_group(Group, Node, Operation),
     {ok, State};
 

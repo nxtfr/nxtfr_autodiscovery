@@ -59,11 +59,11 @@
 
 dev1() ->
     application:start(nxtfr_autodiscovery),
-    nxtfr_event:notify({join_autodiscovery_group, client1}).
+    nxtfr_event:notify({join_autodiscovery_group, group1}).
 
 dev2() ->
     application:start(nxtfr_autodiscovery),
-    nxtfr_event:notify({join_autodiscovery_group, client2}).
+    nxtfr_event:notify({join_autodiscovery_group, group2}).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -153,6 +153,7 @@ handle_call({sync_group, Group, Node, Operation}, _From, State) ->
     {reply, ok, UpdatedState};
 
 handle_call({push_groups, NodeGroups}, _From, #state{is_server = false} = State) ->
+    io:format("handle_call({push_groups, NodeGroups} ~p~n", [NodeGroups]),
     {reply, ok, State#state{node_groups = NodeGroups}};
 
 handle_call(Call, _From, State) ->

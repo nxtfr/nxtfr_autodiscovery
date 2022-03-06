@@ -1,11 +1,13 @@
 {application, nxtfr_autodiscovery,
- [{description, "An OTP application"},
+ [{description, "Nextgen Game Framework Auto Discovery Server"},
   {vsn, "0.1.0"},
   {registered, []},
   {mod, {nxtfr_autodiscovery_app, []}},
   {applications, [
     kernel,
-    stdlib
+    stdlib,
+    nxtfr_event,
+    nxtfr_autodiscovery
    ]},
   {env,[
     {ip, {192, 168, 1, 211}},
@@ -14,6 +16,7 @@
   ]},
   {modules, [
     nxtfr_autodiscovery,
+    nxtfr_autodiscovery_event_handler,
     nxtfr_autodiscovery_app,
     nxtfr_autodiscovery_sup
   ]},
