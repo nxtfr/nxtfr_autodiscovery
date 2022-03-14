@@ -28,7 +28,8 @@
     leave_group/1,
     sync_group/3,
     push_groups/1,
-    query_group/1
+    query_group/1,
+    query_shard/2
     ]).
 
 %% gen_server callbacks
@@ -56,7 +57,9 @@
     local_nodes = [] :: list(),
     node_groups = {} :: map()
 }).
+
 -type state() :: #state{}.
+-type shard_id() :: binary().
 
 dev1() ->
     application:start(nxtfr_autodiscovery),
@@ -92,6 +95,10 @@ push_groups(NodeGroups) ->
 -spec query_group(Group :: atom()) -> {ok, Nodes :: list()}.
 query_group(Group) ->
     gen_server:call(?MODULE, {query_group, Group}).
+
+-spec query_shard(Guid :: binary(), Group :: atom()) -> {ok, Node :: atom()} | {error, group_not_found}.
+query_shard(Uid, Group) ->
+    gen_server:call(?MODULE, {query_shard, Uid, Group}).
 
 -spec init([]) -> {ok, state()}.
 init([]) ->
@@ -167,6 +174,15 @@ handle_call({query_group, Group}, _From, #state{node_groups = NodeGroups} = Stat
             {reply, {ok, GroupList}, State};
         error ->
             {reply, {ok, []}, State}
+    end;
+
+handle_call({query_shard, Uid, Group}, _From, #state{node_groups = NodeGroups} = State) ->
+    case maps:find(Group, NodeGroups) of
+        {ok, GroupList} ->
+            Node = map_uid_to_shard(Uid, GroupList),
+            {reply, {ok, Node}, State};
+        error ->
+            {reply, {error, group_not_found}, State}
     end;
 
 handle_call(Call, _From, State) ->
@@ -320,3 +336,11 @@ sync_local_nodes(Group, Node, Operation, #state{local_nodes = LocalNodes}) ->
 -spec push_node_groups(Node::atom(), NodeGroups :: list()) -> ok.
 push_node_groups(Node, NodeGroups) ->
     rpc:call(Node, nxtfr_autodiscovery, push_groups, [NodeGroups]).
+
+map_uid_to_shard(Uid, NodeGroups) ->
+    ShardKey = uid_to_integer(Uid) rem length(NodeGroups),
+    %% +1 because first element in list is at position 1 not 0.
+    lists:nth(ShardKey + 1, NodeGroups).
+
+uid_to_integer(<<A:8/binary, "-", B:4/binary, "-", C:4/binary, "-", D:4/binary, "-", E:12/binary>>) ->
+    list_to_integer(binary_to_list(<<A/binary, B/binary, C/binary, D/binary, E/binary>>), 16).
