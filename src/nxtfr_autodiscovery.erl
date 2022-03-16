@@ -29,7 +29,8 @@
     sync_group/3,
     push_groups/1,
     query_group/1,
-    query_shard/2
+    query_shard/2,
+    query_random/1
     ]).
 
 %% gen_server callbacks
@@ -59,7 +60,6 @@
 }).
 
 -type state() :: #state{}.
--type shard_id() :: binary().
 
 dev1() ->
     application:start(nxtfr_autodiscovery),
@@ -99,6 +99,10 @@ query_group(Group) ->
 -spec query_shard(Guid :: binary(), Group :: atom()) -> {ok, Node :: atom()} | {error, group_not_found}.
 query_shard(Uid, Group) ->
     gen_server:call(?MODULE, {query_shard, Uid, Group}).
+
+-spec query_random(Group :: atom()) -> {ok, Node :: atom}.
+query_random(Group) ->
+    gen_server:call(?MODULE, {query_random, Group}).
 
 -spec init([]) -> {ok, state()}.
 init([]) ->
@@ -170,20 +174,30 @@ handle_call({push_groups, NodeGroups}, _From, #state{is_server = false} = State)
 
 handle_call({query_group, Group}, _From, #state{node_groups = NodeGroups} = State) ->
     case maps:find(Group, NodeGroups) of
-        {ok, GroupList} ->
-            {reply, {ok, GroupList}, State};
+        {ok, Nodes} ->
+            {reply, {ok, Nodes}, State};
         error ->
             {reply, {ok, []}, State}
     end;
 
 handle_call({query_shard, Uid, Group}, _From, #state{node_groups = NodeGroups} = State) ->
     case maps:find(Group, NodeGroups) of
-        {ok, GroupList} ->
-            Node = map_uid_to_shard(Uid, GroupList),
+        {ok, Nodes} ->
+            Node = map_uid_to_shard(Uid, Nodes),
             {reply, {ok, Node}, State};
         error ->
             {reply, {error, group_not_found}, State}
     end;
+
+handle_call({query_random, Group}, _From, #state{node_groups = NodeGroups} = State) ->
+    case maps:find(Group, NodeGroups) of
+        {ok, Nodes} ->
+            Node = lists:nth(rand:uniform(length(Nodes)), Nodes),
+            {reply, {ok, Node}, State};
+        error ->
+            {reply, {ok, []}, State}
+    end;
+
 
 handle_call(Call, _From, State) ->
     error_logger:error_report([{undefined_call, Call}]),
