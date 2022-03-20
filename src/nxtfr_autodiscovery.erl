@@ -30,7 +30,9 @@
     push_groups/1,
     query_group/1,
     query_shard/2,
-    query_random/1
+    query_random/1,
+    call_shard/5,
+    call_random/4
     ]).
 
 %% gen_server callbacks
@@ -96,13 +98,23 @@ push_groups(NodeGroups) ->
 query_group(Group) ->
     gen_server:call(?MODULE, {query_group, Group}).
 
--spec query_shard(Guid :: binary(), Group :: atom()) -> {ok, Node :: atom()} | {error, group_not_found}.
+-spec query_shard(Uid :: binary(), Group :: atom()) -> {ok, Node :: atom()} | {error, group_not_found}.
 query_shard(Uid, Group) ->
     gen_server:call(?MODULE, {query_shard, Uid, Group}).
 
 -spec query_random(Group :: atom()) -> {ok, Node :: atom}.
 query_random(Group) ->
     gen_server:call(?MODULE, {query_random, Group}).
+
+-spec call_shard(Uid :: binary(), Group :: atom(), Module :: atom(), Function :: atom(), Args :: list()) -> Result :: any().
+call_shard(Uid, Group, Module, Function, Args) ->
+    {ok, Node} = query_shard(Uid, Group),
+    rpc:call(Node, Module, Function, Args).
+
+-spec call_random(Group :: atom(), Module :: atom(), Function :: atom(), Args :: list()) -> Result :: any().
+call_random(Group, Module, Function, Args) ->
+    {ok, Node} = query_random(Group),
+    rpc:call(Node, Module, Function, Args).
 
 -spec init([]) -> {ok, state()}.
 init([]) ->
