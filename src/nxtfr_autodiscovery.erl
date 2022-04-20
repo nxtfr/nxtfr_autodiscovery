@@ -125,7 +125,6 @@ init([]) ->
     {Ip, MulticastIp} = get_ip_and_multicast(Interface),
     case ?MODULE:create_server_socket(Ip) of
         {ok, Socket} ->
-            error_logger:info_msg({created_server, Socket}),
             State = #state{
                 socket = Socket,
                 is_server = true,
@@ -137,7 +136,6 @@ init([]) ->
             {ok, State};
         {error, eaddrinuse} ->
             {ok, Socket} = gen_udp:open(0, ?UDP_OPTIONS),
-            error_logger:info_msg({created_client, Socket}),
             State = #state{
                 socket = Socket,
                 is_server = false,
