@@ -307,9 +307,15 @@ send_term(Socket, Ip, Port, Term) ->
 get_ip_and_multicast(Interface) ->
     {ok, IfList} = inet:getifaddrs(),
     {_, LoOpts} = proplists:lookup(Interface, IfList),
-    {_, Ip} = proplists:lookup(addr, LoOpts),
-    {_, MulticastIp} = proplists:lookup(broadaddr, LoOpts),
-    {Ip, MulticastIp}.
+    case proplists:lookup(addr, LoOpts) of
+        {_, Ip} ->
+            case proplists:lookup(broadaddr, LoOpts) of
+                {_, MulticastIp} -> {Ip, MulticastIp};
+                none -> {{0, 0, 0, 0}, {0, 0, 0, 0}}
+            end;
+        none ->
+            {{0, 0, 0, 0}, {0, 0, 0, 0}}
+    end.
 
 -spec get_interface() -> Interface :: string().
 get_interface() ->
