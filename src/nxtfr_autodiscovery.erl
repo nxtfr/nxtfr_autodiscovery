@@ -353,8 +353,8 @@ update_local_nodes(Node, #state{local_nodes = LocalNodes} = State) ->
 
 -spec is_node_local(OtherNode :: atom) -> boolean().
 is_node_local(OtherNode) ->
-    OtherHost = lists:nth(2, string:split(atom_to_binary(OtherNode), <<"@">>)),
-    MyHost = lists:nth(2, string:split(atom_to_binary(node()), <<"@">>)),
+    OtherHost = lists:nth(2, string:split(erlang:atom_to_binary(OtherNode), <<"@">>)),
+    MyHost = lists:nth(2, string:split(erlang:atom_to_binary(node()), <<"@">>)),
     OtherHost == MyHost.
 
 -spec sync_local_nodes(Group :: atom(), Node :: atom(), Operation :: add | remove, state()) -> any().
